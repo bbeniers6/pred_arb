@@ -15,6 +15,8 @@ interface AppState {
   positions: Position[];
   loading: boolean;
   error: string | null;
+  warnings: string[];
+  marketCounts: { polymarket: number; kalshi: number };
   refresh: () => Promise<void>;
   useDemo: boolean;
   setUseDemo: (v: boolean) => void;
@@ -30,6 +32,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [positions] = useState<Position[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [marketCounts, setMarketCounts] = useState<{ polymarket: number; kalshi: number }>({ polymarket: 0, kalshi: 0 });
   const [useDemo, setUseDemo] = useState(true);
 
   useEffect(() => {
@@ -48,6 +52,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setWarnings([]);
 
     try {
       if (useDemo) {
@@ -55,19 +60,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const demoOpps = getDemoOpportunities();
         setMarkets(demoMarkets);
         setOpportunities(demoOpps);
+        setMarketCounts({ polymarket: demoMarkets.polymarket.length, kalshi: demoMarkets.kalshi.length });
       } else {
-        const res = await fetch("/api/markets");
+        const params = new URLSearchParams({
+          minConfidence: String(settings.matchConfidenceThreshold),
+          minProfitPct: String(settings.minProfitPct),
+        });
+        const res = await fetch(`/api/markets?${params}`);
         const data = await res.json();
         if (!data.success) throw new Error(data.error || "Failed to fetch markets");
         setMarkets(data.data.markets);
         setOpportunities(data.data.opportunities);
+        setMarketCounts(data.data.marketCounts || { polymarket: 0, kalshi: 0 });
+        if (data.data.errors && data.data.errors.length > 0) {
+          setWarnings(data.data.errors);
+        }
       }
     } catch (e: any) {
       setError(e.message || "Unknown error");
     } finally {
       setLoading(false);
     }
-  }, [useDemo]);
+  }, [useDemo, settings.matchConfidenceThreshold, settings.minProfitPct]);
 
   // Initial fetch
   useEffect(() => {
@@ -88,7 +102,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         markets, opportunities,
         trades, addTrade,
         positions,
-        loading, error,
+        loading, error, warnings, marketCounts,
         refresh,
         useDemo, setUseDemo,
       }}
