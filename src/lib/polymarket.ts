@@ -4,22 +4,45 @@ const POLYMARKET_API = "https://clob.polymarket.com";
 const POLYMARKET_GAMMA_API = "https://gamma-api.polymarket.com";
 
 export async function fetchPolymarketMarkets(): Promise<Market[]> {
-  const res = await fetch(`${POLYMARKET_GAMMA_API}/markets?closed=false&limit=100&active=true&order=volume&ascending=false`);
+  const allMarkets: Market[] = [];
+  const PAGE_SIZE = 100;
+  let offset = 0;
 
-  if (!res.ok) {
-    throw new Error(`Polymarket API error: ${res.status}`);
-  }
+  // Paginate through all active markets using offset
+  while (true) {
+    const params = new URLSearchParams({
+      closed: "false",
+      active: "true",
+      limit: String(PAGE_SIZE),
+      offset: String(offset),
+      order: "volume",
+      ascending: "false",
+    });
 
-  const data = await res.json();
+    const res = await fetch(`${POLYMARKET_GAMMA_API}/markets?${params}`);
 
-  return data
-    .filter((m: any) => m.active && !m.closed && m.enableOrderBook)
-    .map((m: any): Market => {
-      const outcomePrices = JSON.parse(m.outcomePrices || "[]");
-      const yesPrice = parseFloat(outcomePrices[0]) || 0.5;
-      const noPrice = parseFloat(outcomePrices[1]) || 1 - yesPrice;
+    if (!res.ok) {
+      throw new Error(`Polymarket API error: ${res.status}`);
+    }
 
-      return {
+    const data = await res.json();
+
+    if (!Array.isArray(data) || data.length === 0) break;
+
+    for (const m of data) {
+      if (!m.active || m.closed || !m.enableOrderBook) continue;
+
+      let yesPrice = 0.5;
+      let noPrice = 0.5;
+      try {
+        const outcomePrices = JSON.parse(m.outcomePrices || "[]");
+        yesPrice = parseFloat(outcomePrices[0]) || 0.5;
+        noPrice = parseFloat(outcomePrices[1]) || 1 - yesPrice;
+      } catch {
+        // keep defaults
+      }
+
+      allMarkets.push({
         id: m.conditionId || m.id,
         platform: "polymarket",
         title: m.question || m.title,
@@ -33,8 +56,15 @@ export async function fetchPolymarketMarkets(): Promise<Market[]> {
         active: true,
         url: `https://polymarket.com/event/${m.slug}`,
         rawData: m,
-      };
-    });
+      });
+    }
+
+    // If we got fewer than PAGE_SIZE, we've reached the end
+    if (data.length < PAGE_SIZE) break;
+    offset += PAGE_SIZE;
+  }
+
+  return allMarkets;
 }
 
 export async function placePolymarketOrder(
@@ -44,14 +74,12 @@ export async function placePolymarketOrder(
   price: number,
   amount: number
 ): Promise<{ orderId: string }> {
-  // In production, this would use the CLOB API with proper authentication
-  // Polymarket uses a signature-based auth with their CLOB client
   const res = await fetch(`${POLYMARKET_API}/order`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "POLY_API_KEY": credentials.apiKey,
-      "POLY_API_SECRET": credentials.apiSecret,
+      POLY_API_KEY: credentials.apiKey,
+      POLY_API_SECRET: credentials.apiSecret,
     },
     body: JSON.stringify({
       tokenID: marketId,
