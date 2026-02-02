@@ -6,7 +6,8 @@ export async function fetchKalshiMarkets(): Promise<Market[]> {
   const allMarkets: Market[] = [];
   let cursor: string | undefined;
 
-  // Paginate through all open markets
+  // Paginate through all open markets with rate limit handling
+  let page = 0;
   while (true) {
     const params = new URLSearchParams({
       limit: "200",
@@ -19,6 +20,13 @@ export async function fetchKalshiMarkets(): Promise<Market[]> {
     const res = await fetch(`${KALSHI_API}/markets?${params}`, {
       headers: { Accept: "application/json" },
     });
+
+    if (res.status === 429) {
+      // Rate limited — wait and retry
+      const retryAfter = parseInt(res.headers.get("retry-after") || "2", 10);
+      await new Promise((r) => setTimeout(r, retryAfter * 1000));
+      continue;
+    }
 
     if (!res.ok) {
       throw new Error(`Kalshi API error: ${res.status}`);
@@ -55,6 +63,10 @@ export async function fetchKalshiMarkets(): Promise<Market[]> {
 
     cursor = data.cursor;
     if (!cursor) break;
+
+    // Delay between pages to avoid 429s
+    page++;
+    await new Promise((r) => setTimeout(r, 500));
   }
 
   return allMarkets;
