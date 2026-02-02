@@ -21,6 +21,12 @@ export async function fetchPolymarketMarkets(): Promise<Market[]> {
 
     const res = await fetch(`${POLYMARKET_GAMMA_API}/markets?${params}`);
 
+    if (res.status === 429) {
+      const retryAfter = parseInt(res.headers.get("retry-after") || "2", 10);
+      await new Promise((r) => setTimeout(r, retryAfter * 1000));
+      continue;
+    }
+
     if (!res.ok) {
       throw new Error(`Polymarket API error: ${res.status}`);
     }
@@ -62,6 +68,9 @@ export async function fetchPolymarketMarkets(): Promise<Market[]> {
     // If we got fewer than PAGE_SIZE, we've reached the end
     if (data.length < PAGE_SIZE) break;
     offset += PAGE_SIZE;
+
+    // Delay between pages to avoid rate limits
+    await new Promise((r) => setTimeout(r, 500));
   }
 
   return allMarkets;
