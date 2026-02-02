@@ -3,24 +3,40 @@ import { Market, PlatformCredentials, ArbSide } from "@/types";
 const KALSHI_API = "https://api.elections.kalshi.com/trade-api/v2";
 
 export async function fetchKalshiMarkets(): Promise<Market[]> {
-  const res = await fetch(`${KALSHI_API}/markets?limit=100&status=open`, {
-    headers: { "Accept": "application/json" },
-  });
+  const allMarkets: Market[] = [];
+  let cursor: string | undefined;
 
-  if (!res.ok) {
-    throw new Error(`Kalshi API error: ${res.status}`);
-  }
+  // Paginate through all open markets
+  while (true) {
+    const params = new URLSearchParams({
+      limit: "200",
+      status: "open",
+    });
+    if (cursor) {
+      params.set("cursor", cursor);
+    }
 
-  const data = await res.json();
-  const markets = data.markets || [];
+    const res = await fetch(`${KALSHI_API}/markets?${params}`, {
+      headers: { Accept: "application/json" },
+    });
 
-  return markets
-    .filter((m: any) => m.status === "open" || m.status === "active")
-    .map((m: any): Market => {
-      const yesPrice = (m.yes_ask ?? m.last_price ?? 50) / 100;
-      const noPrice = (m.no_ask ?? (100 - (m.last_price ?? 50))) / 100;
+    if (!res.ok) {
+      throw new Error(`Kalshi API error: ${res.status}`);
+    }
 
-      return {
+    const data = await res.json();
+    const markets = data.markets || [];
+
+    if (markets.length === 0) break;
+
+    for (const m of markets) {
+      if (m.status !== "open" && m.status !== "active") continue;
+
+      // Prefer *_dollars fields (string like "0.56"), fall back to cent integers
+      const yesPrice = parsePrice(m.yes_ask_dollars, m.yes_ask, m.last_price_dollars, m.last_price);
+      const noPrice = parsePrice(m.no_ask_dollars, m.no_ask, null, null) || (1 - yesPrice);
+
+      allMarkets.push({
         id: m.ticker,
         platform: "kalshi",
         title: m.title || m.subtitle || m.ticker,
@@ -34,8 +50,41 @@ export async function fetchKalshiMarkets(): Promise<Market[]> {
         active: true,
         url: `https://kalshi.com/markets/${m.ticker}`,
         rawData: m,
-      };
-    });
+      });
+    }
+
+    cursor = data.cursor;
+    if (!cursor) break;
+  }
+
+  return allMarkets;
+}
+
+/**
+ * Parse a price from Kalshi API fields. Tries dollar string first, then cents integer.
+ * Returns a 0-1 decimal value or 0 if nothing is usable.
+ */
+function parsePrice(
+  dollarsStr: string | null | undefined,
+  cents: number | null | undefined,
+  fallbackDollarsStr: string | null | undefined,
+  fallbackCents: number | null | undefined
+): number {
+  if (dollarsStr) {
+    const v = parseFloat(dollarsStr);
+    if (v > 0) return v;
+  }
+  if (cents && cents > 0) {
+    return cents / 100;
+  }
+  if (fallbackDollarsStr) {
+    const v = parseFloat(fallbackDollarsStr);
+    if (v > 0) return v;
+  }
+  if (fallbackCents && fallbackCents > 0) {
+    return fallbackCents / 100;
+  }
+  return 0;
 }
 
 export async function placeKalshiOrder(
@@ -49,7 +98,7 @@ export async function placeKalshiOrder(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${credentials.apiKey}`,
+      Authorization: `Bearer ${credentials.apiKey}`,
     },
     body: JSON.stringify({
       ticker: marketId,
